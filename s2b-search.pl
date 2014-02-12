@@ -12,6 +12,7 @@ use List::Util qw( max );
 use Mojo::DOM;
 use Path::Tiny;
 use Text::CSV;
+use URI::Escape;
 
 my $agent = 'Mozilla/5.0 (compatible; MSIE 8.0; Windows NT 6.1; Trident/4.0; GTB7.4; InfoPath.2; SV1; .NET CLR 3.3.69573; WOW64; en-US)';
 my %url   = (
@@ -112,7 +113,13 @@ sub get_searched_product_codes {
 sub get_product_ids {
     my $params = shift;
 
-    my $res = $http->get( get_url( 'category_list', $params ) );
+    my %p            = %$params;
+    my $search_query = delete $p{searchQuery};
+    my $url          = get_url( 'category_list', $params );
+    $url .= '&searchQuery=';
+    $url .= uri_escape( encode( "cp949", decode( "utf-8", $search_query ) ) );
+
+    my $res = $http->get($url);
     my $dom = Mojo::DOM->new( decode( 'euc-kr', $res->{content} ) );
 
     my %goods;

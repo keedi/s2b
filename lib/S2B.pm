@@ -1197,7 +1197,7 @@ sub search_company {
     return unless $company;
     return unless $query;
 
-    $delay //= 2;
+    $delay //= 1;
 
     my $count = 100;
 

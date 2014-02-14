@@ -8,6 +8,7 @@ use Moo;
 use Encode qw( encode decode );
 use HTTP::Tiny;
 use List::MoreUtils qw( uniq );
+use List::Util qw( max );
 use Mojo::DOM;
 use Path::Tiny;
 use URI::Escape;
@@ -58,19 +59,26 @@ sub search_product {
         sortField          => 'PCAC',
     );
 
-    return $self->_get_product_ids(\%params);
+    return $self->_get_product_codes(\%params);
 }
 
-sub _get_product_ids {
+sub _get_product_codes {
     my ( $self, $params ) = @_;
 
-    my %p            = %$params;
-    my $search_query = delete $p{searchQuery};
+    my %p              = %$params;
+    my $search_query   = delete $p{searchQuery};
+    my $search_requery = delete $p{searchRequery};
 
     my $url = $self->base_url . $self->category_url;
-    $url .= '?' .  HTTP::Tiny->www_form_urlencode($params);
-    $url .= '&searchQuery=';
-    $url .= uri_escape( encode( "cp949", decode( "utf-8", $search_query ) ) );
+    $url .= '?' .  HTTP::Tiny->www_form_urlencode(\%p);
+    if ($search_query) {
+        $url .= '&searchQuery=';
+        $url .= uri_escape( encode( "cp949", $search_query ) );
+    }
+    if ($search_requery) {
+        $url .= '&searchRequery=';
+        $url .= uri_escape( encode( "cp949", $search_requery ) );
+    }
 
     my $res = $self->http->get($url);
     my $dom = Mojo::DOM->new( decode( 'euc-kr', $res->{content} ) );
@@ -87,15 +95,25 @@ sub _get_product_ids {
     return keys %goods;
 }
 
+sub filter_path {
+    my ( $self, $str ) = @_;
+
+    $str =~ s{[^ \w\.\-_()\[\]]}{_}gms;
+    $str =~ s{(^\s+|\s+$)}{}gms;
+    $str =~ s{\s+}{ }gms;
+
+    return $str;
+}
+
 sub save_images {
-    my ( $self, $model, $code, $urls ) = @_;
+    my ( $self, $target_dir, $target_prefix, $urls ) = @_;
 
     for ( my $i = 0; $i < @$urls; ++$i ) {
         my $res = $self->http->get( $urls->[$i] );
         next unless $res->{success};
 
         my $no = $i + 1;
-        path("$model/$code-$no.jpg")->touchpath->spew_raw( $res->{content} );
+        path("$target_dir/$target_prefix-$no.jpg")->touchpath->spew_raw( $res->{content} );
     }
 }
 
@@ -1171,6 +1189,69 @@ sub _build_category {
             3   => \%level3_reverse,
         },
     };
+}
+
+sub search_company {
+    my ( $self, $company, $query, $delay ) = @_;
+
+    return unless $company;
+    return unless $query;
+
+    $delay //= 2;
+
+    my $count = 100;
+
+    my %params = (
+        actionType         => 'MAIN_SEARCH',
+        searchField        => 'COMPANY_NAME',
+        searchQuery        => $company,
+        searchRequery      => $query,
+        startIndex         => 0,
+        viewCount          => $count,
+    );
+
+    my @all_codes;
+    my $last_start_index = $self->_get_last_start_index( \%params );
+    for ( my $i = 0; $i <= $last_start_index; $i += $count ) {
+        say STDERR "$i/$last_start_index";
+        my @codes = $self->_get_product_codes({ %params, startIndex => $i });
+        push @all_codes, @codes;
+
+        sleep $delay if defined $delay;
+    }
+
+    return @all_codes;
+}
+
+sub _get_last_start_index {
+    my ( $self, $params ) = @_;
+
+    my %p              = %$params;
+    my $search_query   = delete $p{searchQuery};
+    my $search_requery = delete $p{searchRequery};
+
+    my $url = $self->base_url . $self->category_url;
+    $url .= '?' .  HTTP::Tiny->www_form_urlencode(\%p);
+    $url .= '&searchQuery=';
+    $url .= uri_escape( encode( "cp949", $search_query ) );
+    $url .= '&searchRequery=';
+    $url .= uri_escape( encode( "cp949", $search_requery ) );
+
+    my $res = $self->http->get($url);
+    my $dom = Mojo::DOM->new( decode( 'euc-kr', $res->{content} ) );
+
+    my @pages;
+    $dom->find('a')->each(sub {
+        my $href = $_->attr('href');
+
+        return unless $href =~ m/javascript:movePage\('delivery', '(\d+)'\)/;
+
+        push @pages, $1;
+    });
+
+    my $last_start_index = max(@pages) || 0;
+
+    return $last_start_index;
 }
 
 1;
